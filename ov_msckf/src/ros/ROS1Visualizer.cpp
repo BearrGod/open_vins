@@ -448,7 +448,7 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   _app->feed_measurement_imu(message);
   visualize_odometry(message.timestamp);
   auto t_inertial2 = boost::posix_time::microsec_clock::local_time();
-  PRINT_INFO(REDPURPLE "Inertial treatment time TIME: %.3f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
+  PRINT_INFO(REDPURPLE "Inertial treatment time TIME: %.6f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
 
   // If the processing queue is currently active / running just return so we can keep getting measurements
   // Otherwise create a second thread to do our update in an async manor
