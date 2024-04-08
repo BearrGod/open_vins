@@ -501,7 +501,7 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
 
 void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, int cam_id0) {
 
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (msg0->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
   // Check if we should drop this image
   double timestamp = msg0->header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
@@ -541,8 +541,8 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
 
 void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
                                      int cam_id1) {
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (msg0->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (msg1->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (ros::Time::now().toSec()-msg1->header.stamp.toSec()) * 1000.0f)
   // Check if we should drop this image
   double timestamp = msg0->header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
@@ -628,6 +628,8 @@ void ROS1Visualizer::publish_state() {
     }
   }
   pub_poseimu.publish(poseIinM);
+  PRINT_INFO(BOLDBLUE "Pose delay : %.8f ms\n" RESET, (ros::Time::now().toSec() - poseIinM.header.stamp.toSec()) * 1000.0f);
+
 
   //=========================================================
   //=========================================================
