@@ -501,6 +501,7 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
 
 void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, int cam_id0) {
 
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (msg0->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
   // Check if we should drop this image
   double timestamp = msg0->header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
