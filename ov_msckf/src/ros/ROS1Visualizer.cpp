@@ -286,7 +286,7 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
   if (pub_odomimu.getNumSubscribers() != 0) {
 
     nav_msgs::Odometry odomIinM;
-    odomIinM.header.stamp = ros::Time(timestamp); //ros::Time::now() ; 
+    odomIinM.header.stamp = ros::Time(timestamp); 
     odomIinM.header.frame_id = "global";
 
     // The POSE component (orientation and position)
@@ -437,6 +437,7 @@ void ROS1Visualizer::visualize_final() {
 
 void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
 
+  PRINT_INFO(BOLDREDPURPLE "Inertial Data transport time : %8f ms\n\n" RESET, (msg->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
   // convert into correct format
   auto t_inertial1 = boost::posix_time::microsec_clock::local_time();
   ov_core::ImuData message;
@@ -448,7 +449,7 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   _app->feed_measurement_imu(message);
   visualize_odometry(message.timestamp);
   auto t_inertial2 = boost::posix_time::microsec_clock::local_time();
-  PRINT_INFO(REDPURPLE "Inertial treatment time TIME: %.6f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
+  PRINT_INFO(BOLDREDPURPLE "Inertial treatment time TIME: %.8f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
 
   // If the processing queue is currently active / running just return so we can keep getting measurements
   // Otherwise create a second thread to do our update in an async manor
@@ -539,7 +540,8 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
 
 void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
                                      int cam_id1) {
-
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (msg0->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (msg1->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
   // Check if we should drop this image
   double timestamp = msg0->header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
