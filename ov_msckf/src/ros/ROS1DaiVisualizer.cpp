@@ -19,8 +19,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include "ROS1Visualizer.h"
-
+#include "ROS1DaiVisualizer.h"
+#include <functional>
 #include "core/VioManager.h"
 #include "ros/ROSVisualizerHelper.h"
 #include "sim/Simulator.h"
@@ -35,11 +35,12 @@ using namespace ov_core;
 using namespace ov_type;
 using namespace ov_msckf;
 
-ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_ptr<VioManager> app, std::shared_ptr<Simulator> sim)
-    : _nh(nh), _app(app), _sim(sim), thread_update_running(false) {
+ROS1DaiVisualizer::ROS1DaiVisualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_ptr<VioManager> app, std::shared_ptr<DaiCameraHandle> cam_ptr, std::shared_ptr<Simulator> sim)
+    : _nh(nh), _app(app), _cam_ptr(cam_ptr) ,_sim(sim), thread_update_running(false) {
 
   // Setup our transform broadcaster
   mTfBr = std::make_shared<tf::TransformBroadcaster>();
+  _on_odom_ready = [](const nav_msgs::Odometry& msg){return ; } ; // function that does nothing.
 
   // Create image transport
   image_transport::ImageTransport it(*_nh);
@@ -148,53 +149,40 @@ ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_
   }
 }
 
-void ROS1Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> parser) {
-
-  // We need a valid parser
+void ROS1DaiVisualizer::setup_dai_subscribers(std::shared_ptr<ov_core::YamlParser> parser)
+{
+  // We need a valid parser 
   assert(parser != nullptr);
+  /// Read the topics and dai stream names 
+  std::string cam_topic0, cam_topic1, dai_stream0 , dai_stream1 ;
+  parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
+  parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
+  parser->parse_external("relative_config_imucam", "cam" + std::to_string(0),"dai_stream", dai_stream0) ;
+  parser->parse_external("relative_config_imucam", "cam" + std::to_string(1),"dai_stream", dai_stream1) ;
 
-  // Create imu subscriber (handle legacy ros param info)
-  std::string topic_imu;
-  _nh->param<std::string>("topic_imu", topic_imu, "/imu0");
-  parser->parse_external("relative_config_imu", "imu0", "rostopic", topic_imu);
-  sub_imu = _nh->subscribe(topic_imu, 1000, &ROS1Visualizer::callback_inertial, this,ros::TransportHints().udp());
-  PRINT_INFO("subscribing to IMU: %s\n", topic_imu.c_str());
-
-  // Logic for sync stereo subscriber
-  // https://answers.ros.org/question/96346/subscribe-to-two-image_raws-with-one-function/?answer=96491#post-id-96491
+  _cam_ptr->setImuCallback([this](const sensor_msgs::Imu& imu_msg){this->dai_callback_inertial(imu_msg) ; }) ;
   if (_app->get_params().state_options.num_cameras == 2) {
-    // Read in the topics
-    std::string cam_topic0, cam_topic1;
-    _nh->param<std::string>("topic_camera" + std::to_string(0), cam_topic0, "/cam" + std::to_string(0) + "/image_raw");
-    _nh->param<std::string>("topic_camera" + std::to_string(1), cam_topic1, "/cam" + std::to_string(1) + "/image_raw");
-    parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
-    parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
-    // Create sync filter (they have unique pointers internally, so we have to use move logic here...)
-    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic0, 1,ros::TransportHints().udp());
-    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic1, 1,ros::TransportHints().udp());
-    auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
-    sync->registerCallback(boost::bind(&ROS1Visualizer::callback_stereo, this, _1, _2, 0, 1));
-    // Append to our vector of subscribers
-    sync_cam.push_back(sync);
-    sync_subs_cam.push_back(image_sub0);
-    sync_subs_cam.push_back(image_sub1);
-    PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic0.c_str());
-    PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic1.c_str());
+    // Set the dai camera callback.
+    _cam_ptr->setStereoCallback([this](const std::pair<sensor_msgs::Image,sensor_msgs::Image>& images){ this->dai_callback_stereo(images,0,1); },dai_stream0,dai_stream1) ;
+    PRINT_INFO("subscribing to cam (stereo): %s with dai_stream %s \n", cam_topic0.c_str(), dai_stream0.c_str());
+    PRINT_INFO("subscribing to cam (stereo): %s with dai_stream %s \n", cam_topic1.c_str(), dai_stream1.c_str()); 
   } else {
     // Now we should add any non-stereo callbacks here
     for (int i = 0; i < _app->get_params().state_options.num_cameras; i++) {
       // read in the topic
       std::string cam_topic;
+      std::string dai_stream ; 
       _nh->param<std::string>("topic_camera" + std::to_string(i), cam_topic, "/cam" + std::to_string(i) + "/image_raw");
+      parser->parse_external("relative_config_imucam","cam" + std::to_string(i),"dai_stream", dai_stream) ; 
       parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "rostopic", cam_topic);
-      // create subscriber
-      subs_cam.push_back(_nh->subscribe<sensor_msgs::Image>(cam_topic, 10, boost::bind(&ROS1Visualizer::callback_monocular, this, _1, i)));
-      PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
+      // Set the dai camera callback
+      _cam_ptr->setStreamCallback(dai_stream,[this,i](const sensor_msgs::Image& msg){this->dai_callback_monocular(msg,i) ; } ) ; 
+      PRINT_INFO("subscribing to cam (mono): %s with dai stream %s \n", cam_topic.c_str(),dai_stream.c_str());
     }
   }
 }
 
-void ROS1Visualizer::visualize() {
+void ROS1DaiVisualizer::visualize() {
 
   // Return if we have already visualized
   if (last_visualization_timestamp == _app->get_state()->_timestamp && _app->initialized())
@@ -242,7 +230,7 @@ void ROS1Visualizer::visualize() {
   // PRINT_DEBUG(BLUE "[TIME]: %.4f seconds for visualization\n" RESET, time_total);
 }
 
-void ROS1Visualizer::visualize_odometry(double timestamp) {
+void ROS1DaiVisualizer::visualize_odometry(double timestamp) {
 
   // Return if we have not inited
   if (!_app->initialized())
@@ -323,6 +311,7 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
         odomIinM.twist.covariance[6 * r + c] = cov_plus(r + 6, c + 6);
       }
     }
+    _on_odom_ready(odomIinM) ; 
     pub_odomimu.publish(odomIinM);
   }
 
@@ -349,7 +338,7 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
   }
 }
 
-void ROS1Visualizer::visualize_final() {
+void ROS1DaiVisualizer::visualize_final() {
 
   // Final time offset value
   if (_app->get_state()->_options.do_calib_camera_timeoffset) {
@@ -435,15 +424,15 @@ void ROS1Visualizer::visualize_final() {
   PRINT_INFO(REDPURPLE "TIME: %.3f seconds\n\n" RESET, (rT2 - rT1).total_microseconds() * 1e-6);
 }
 
-void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
+void ROS1DaiVisualizer::dai_callback_inertial(const sensor_msgs::Imu& msg) {
 
-  PRINT_INFO(BOLDREDPURPLE "Inertial Data transport time : %8f ms\n\n" RESET, (msg->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Inertial Data transport time : %8f ms\n\n" RESET, (msg.header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
   // convert into correct format
   auto t_inertial1 = boost::posix_time::microsec_clock::local_time();
   ov_core::ImuData message;
-  message.timestamp = msg->header.stamp.toSec();
-  message.wm << msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z;
-  message.am << msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z;
+  message.timestamp = msg.header.stamp.toSec();
+  message.wm << msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z;
+  message.am << msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z;
 
   // send it to our VIO system
   _app->feed_measurement_imu(message);
@@ -499,11 +488,11 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   }
 }
 
-void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, int cam_id0) {
+void ROS1DaiVisualizer::dai_callback_monocular(const sensor_msgs::Image &msg0, int cam_id0) {
 
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0.header.stamp.toSec()) * 1000.0f)
   // Check if we should drop this image
-  double timestamp = msg0->header.stamp.toSec();
+  double timestamp = msg0.header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
   if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
     return;
@@ -513,7 +502,7 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
   // Get the image
   cv_bridge::CvImageConstPtr cv_ptr;
   try {
-    cv_ptr = cv_bridge::toCvShare(msg0, sensor_msgs::image_encodings::MONO8);
+    cv_ptr = cv_bridge::toCvCopy(msg0, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s", e.what());
     return;
@@ -539,12 +528,12 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
   std::sort(camera_queue.begin(), camera_queue.end());
 }
 
-void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
-                                     int cam_id1) {
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
-  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (ros::Time::now().toSec()-msg1->header.stamp.toSec()) * 1000.0f)
+void ROS1DaiVisualizer::dai_callback_stereo(const std::pair<sensor_msgs::Image,sensor_msgs::Image>& msgs, int cam_id0, int cam_id1)
+{
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msgs.first.header.stamp.toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (ros::Time::now().toSec()-msgs.second.header.stamp.toSec()) * 1000.0f)
   // Check if we should drop this image
-  double timestamp = msg0->header.stamp.toSec();
+  double timestamp = msgs.first.header.stamp.toSec();
   double time_delta = 1.0 / _app->get_params().track_frequency;
   if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
     return;
@@ -554,7 +543,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
   // Get the image
   cv_bridge::CvImageConstPtr cv_ptr0;
   try {
-    cv_ptr0 = cv_bridge::toCvShare(msg0, sensor_msgs::image_encodings::MONO8);
+    cv_ptr0 = cv_bridge::toCvCopy(msgs.first, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s\n", e.what());
     return;
@@ -563,7 +552,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
   // Get the image
   cv_bridge::CvImageConstPtr cv_ptr1;
   try {
-    cv_ptr1 = cv_bridge::toCvShare(msg1, sensor_msgs::image_encodings::MONO8);
+    cv_ptr1 = cv_bridge::toCvCopy(msgs.second, sensor_msgs::image_encodings::MONO8);
   } catch (cv_bridge::Exception &e) {
     PRINT_ERROR("cv_bridge exception: %s\n", e.what());
     return;
@@ -594,7 +583,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
   std::sort(camera_queue.begin(), camera_queue.end());
 }
 
-void ROS1Visualizer::publish_state() {
+void ROS1DaiVisualizer::publish_state() {
 
   // Get the current state
   std::shared_ptr<State> state = _app->get_state();
@@ -656,7 +645,7 @@ void ROS1Visualizer::publish_state() {
   poses_seq_imu++;
 }
 
-void ROS1Visualizer::publish_images() {
+void ROS1DaiVisualizer::publish_images() {
 
   // Return if we have already visualized
   if (_app->get_state() == nullptr)
@@ -684,7 +673,7 @@ void ROS1Visualizer::publish_images() {
   it_pub_tracks.publish(exl_msg);
 }
 
-void ROS1Visualizer::publish_features() {
+void ROS1DaiVisualizer::publish_features() {
 
   // Check if we have subscribers
   if (pub_points_msckf.getNumSubscribers() == 0 && pub_points_slam.getNumSubscribers() == 0 && pub_points_aruco.getNumSubscribers() == 0 &&
@@ -716,7 +705,7 @@ void ROS1Visualizer::publish_features() {
   pub_points_sim.publish(cloud_SIM);
 }
 
-void ROS1Visualizer::publish_groundtruth() {
+void ROS1DaiVisualizer::publish_groundtruth() {
 
   // Our groundtruth state
   Eigen::Matrix<double, 17, 1> state_gt;
@@ -845,7 +834,7 @@ void ROS1Visualizer::publish_groundtruth() {
   //==========================================================================
 }
 
-void ROS1Visualizer::publish_loopclosure_information() {
+void ROS1DaiVisualizer::publish_loopclosure_information() {
 
   // Get the current tracks in this frame
   double active_tracks_time1 = -1;
