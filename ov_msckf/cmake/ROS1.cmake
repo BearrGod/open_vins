@@ -131,14 +131,6 @@ if (catkin_FOUND AND ENABLE_ROS)
             LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
             RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
     )
-
-    add_executable(run_dai_msckf ../../depthai_standalone/src/oakd_helper.cpp src/ros/ROS1DaiVisualizer.cpp src/run_dai_msckf.cpp)
-    target_link_libraries(run_dai_msckf ov_msckf_lib ${thirdparty_libraries} depthai::core depthai::opencv)
-    install(TARGETS run_dai_msckf
-            ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-            LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-            RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-    )
     
     install(DIRECTORY launch/
             DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
