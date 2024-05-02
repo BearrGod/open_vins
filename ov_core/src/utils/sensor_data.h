@@ -46,6 +46,16 @@ struct ImuData {
   bool operator<(const ImuData &other) const { return timestamp < other.timestamp; }
 };
 
+struct  TrackedPoint
+{
+  uint32_t 	age = 0 ; 
+  float 	harrisScore = 0.f ; 
+  uint32_t 	id = 0 ; 
+  cv::Point2i 	position ; 
+ float 	trackingError = 0.f ; 
+};
+
+
 /**
  * @brief Struct for a collection of camera measurements.
  *
@@ -63,6 +73,9 @@ struct CameraData {
   /// Raw image we have collected for each camera
   std::vector<cv::Mat> images;
 
+  /// Eventual tracking points revieved. These are tracked point from last frames to this frame. 
+  std::vector<std::vector<TrackedPoint>> tracked_points ; 
+
   /// Tracking masks for each camera we have
   std::vector<cv::Mat> masks;
 
@@ -77,6 +90,8 @@ struct CameraData {
     }
   }
 };
+
+
 
 } // namespace ov_core
 
