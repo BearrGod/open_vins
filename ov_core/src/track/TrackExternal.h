@@ -23,11 +23,16 @@
 #define OV_CORE_TRACK_EXTERNAL_H
 
 #include "TrackBase.h"
+#include "utils/opencv_lambda_body.h"
+#include "Grider_GRID.h"
+#include "Grider_FAST.h"
+
+
 
 namespace ov_core {
 
 /**
- * @brief KLT tracking of features.
+ * @brief External tracking of features.
  *
  * This is the implementation of a KLT visual frontend for tracking sparse features.
  * We can track either monocular cameras across time (temporally) along with
@@ -103,7 +108,7 @@ protected:
    * Will try to always have the "max_features" being tracked through KLT at each timestep.
    * Passed images should already be grayscaled.
    */
-  void perform_detection_monocular(const std::vector<TrackedPoint> &tracked0, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
+  void perform_detection_monocular(const std::vector<TrackedPoint> &tracked0,cv::Size sz , const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0, 
                                    std::vector<size_t> &ids0);
 
   /**
@@ -164,6 +169,43 @@ protected:
   std::map<size_t, std::vector<TrackedPoint>> tracked_curr ;
   std::map<size_t, std::vector<cv::Mat>> img_pyramid_curr;
 };
+
+static void perform_griding_external(const std::vector<TrackedPoint> &tracked0 , cv::Size sz , const cv::Mat &mask, const std::vector<std::pair<int, int>> &valid_locs,
+                              std::vector<cv::KeyPoint> &pts, int num_features, int grid_x, int grid_y, int threshold,
+                              bool nonmaxSuppression)
+{
+  // Return if there is nothing to extract
+    if (valid_locs.empty())
+      return;
+
+    // We want to have equally distributed features
+    // NOTE: If we have more grids than number of total points, we calc the biggest grid we can do
+    // NOTE: Thus if we extract 1 point per grid we have
+    // NOTE:    -> 1 = num_features / (grid_x * grid_y)
+    // NOTE:    -> grid_x = ratio * grid_y (keep the original grid ratio)
+    // NOTE:    -> grid_y = sqrt(num_features / ratio)
+    if (num_features < grid_x * grid_y) {
+      double ratio = (double)grid_x / (double)grid_y;
+      grid_y = std::ceil(std::sqrt(num_features / ratio));
+      grid_x = std::ceil(grid_y * ratio);
+    }
+    int num_features_grid = (int)((double)num_features / (double)(grid_x * grid_y)) + 1;
+    assert(grid_x > 0);
+    assert(grid_y > 0);
+    assert(num_features_grid > 0);
+
+    // Calculate the size our extraction boxes should be
+    int size_x = sz.width / grid_x;
+    int size_y = sz.height / grid_y;
+
+    // Make sure our sizes are not zero
+    assert(size_x > 0);
+    assert(size_y > 0);
+    // No need for any fancy stuff. Just check if response is hight enougth and if the point is in the mask
+    for(const auto tp : tracked0)
+        if(tp.harrisScore>threshold && mask.at<uint8_t>((int)tp.position.y, (int)tp.position.x) > 127)
+            pts.push_back(cv::KeyPoint(cv::Point2f(tp.position.x,tp.position.y),1,-1.0,tp.harrisScore,0.0,tp.id)) ; 
+}
 
 } // namespace ov_core
 

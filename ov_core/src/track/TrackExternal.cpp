@@ -86,6 +86,7 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
   cv::Mat mask = message.masks.at(msg_id);
   // Get tracked points for this image 
   std::vector<TrackedPoint> tracked_pts = tracked_curr.at(cam_id) ;
+  cv::Size sz = message.image_sizes.at(cam_id) ; 
   rT2 = boost::posix_time::microsec_clock::local_time();
 
   // If we didn't have any successful tracks last time, just extract this time
@@ -95,6 +96,7 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
     std::vector<cv::KeyPoint> good_left;
     std::vector<size_t> good_ids_left;
     perform_detection_monocular(imgpyr, mask, good_left, good_ids_left);
+    perform_detection_monocular(tracked_pts,sz,mask,good_left,good_ids_left) ; 
     // Save the current image and pyramid
     std::lock_guard<std::mutex> lckv(mtx_last_vars);
     img_last[cam_id] = img;
@@ -318,17 +320,17 @@ void TrackExternal::perform_detection_monocular(const std::vector<cv::Mat> &img0
 }
 
 
-void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> &tracked0, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
+void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> &tracked0,cv::Size sz, const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0,
                                            std::vector<size_t> &ids0) {
 
   // Create a 2D occupancy grid for this current image
   // Note that we scale this down, so that each grid point is equal to a set of pixels
   // This means that we will reject points that less than grid_px_size points away then existing features
-  cv::Size size_close((int)((float)img0pyr.at(0).cols / (float)min_px_dist),
-                      (int)((float)img0pyr.at(0).rows / (float)min_px_dist)); // width x height
+  cv::Size size_close((int)((float)sz.width / (float)min_px_dist),
+                      (int)((float)sz.height / (float)min_px_dist)); // width x height
   cv::Mat grid_2d_close = cv::Mat::zeros(size_close, CV_8UC1);
-  float size_x = (float)img0pyr.at(0).cols / (float)grid_x;
-  float size_y = (float)img0pyr.at(0).rows / (float)grid_y;
+  float size_x = (float)sz.width / (float)grid_x;
+  float size_y = (float)sz.height / (float)grid_y;
   cv::Size size_grid(grid_x, grid_y); // width x height
   cv::Mat grid_2d_grid = cv::Mat::zeros(size_grid, CV_8UC1);
   cv::Mat mask0_updated = mask0.clone();
@@ -340,7 +342,7 @@ void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> 
     int x = (int)kpt.pt.x;
     int y = (int)kpt.pt.y;
     int edge = 10;
-    if (x < edge || x >= img0pyr.at(0).cols - edge || y < edge || y >= img0pyr.at(0).rows - edge) {
+    if (x < edge || x >= sz.width - edge || y < edge || y >= sz.height - edge) {
       it0 = pts0.erase(it0);
       it1 = ids0.erase(it1);
       continue;
@@ -380,7 +382,7 @@ void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> 
       grid_2d_grid.at<uint8_t>(y_grid, x_grid) += 1;
     }
     // Append this to the local mask of the image
-    if (x - min_px_dist >= 0 && x + min_px_dist < img0pyr.at(0).cols && y - min_px_dist >= 0 && y + min_px_dist < img0pyr.at(0).rows) {
+    if (x - min_px_dist >= 0 && x + min_px_dist < sz.width && y - min_px_dist >= 0 && y + min_px_dist < sz.height) {
       cv::Point pt1(x - min_px_dist, y - min_px_dist);
       cv::Point pt2(x + min_px_dist, y + min_px_dist);
       cv::rectangle(mask0_updated, pt1, pt2, cv::Scalar(255), -1);
@@ -417,7 +419,7 @@ void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> 
     }
   }
   std::vector<cv::KeyPoint> pts0_ext;
-  Grider_GRID::perform_griding(img0pyr.at(0), mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
+  perform_griding_external(tracked0, sz,mask0_updated, valid_locs, pts0_ext, num_features, grid_x, grid_y, threshold, true);
 
   // Now, reject features that are close a current feature
   std::vector<cv::KeyPoint> kpts0_new;

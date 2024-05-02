@@ -73,6 +73,9 @@ struct CameraData {
   /// Raw image we have collected for each camera
   std::vector<cv::Mat> images;
 
+  /// Image sizes in case we decide to only work with trackers and not size. 
+  std::vector<cv::Size> image_sizes;
+
   /// Eventual tracking points revieved. These are tracked point from last frames to this frame. 
   std::vector<std::vector<TrackedPoint>> tracked_points ; 
 
