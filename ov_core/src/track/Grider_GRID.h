@@ -32,6 +32,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "utils/opencv_lambda_body.h"
+#include "Grider_FAST.h"
 
 namespace ov_core {
 
