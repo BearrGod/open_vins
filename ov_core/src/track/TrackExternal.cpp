@@ -95,13 +95,14 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
     // Detect new features
     std::vector<cv::KeyPoint> good_left;
     std::vector<size_t> good_ids_left;
-    perform_detection_monocular(imgpyr, mask, good_left, good_ids_left);
+    // perform_detection_monocular(imgpyr, mask, good_left, good_ids_left);
     perform_detection_monocular(tracked_pts,sz,mask,good_left,good_ids_left) ; 
     // Save the current image and pyramid
     std::lock_guard<std::mutex> lckv(mtx_last_vars);
     img_last[cam_id] = img;
     img_pyramid_last[cam_id] = imgpyr;
     img_mask_last[cam_id] = mask;
+    tracked_last[cam_id] = tracked_pts ; 
     pts_last[cam_id] = good_left;
     ids_last[cam_id] = good_ids_left;
     return;
@@ -112,7 +113,9 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
   int pts_before_detect = (int)pts_last[cam_id].size();
   auto pts_left_old = pts_last[cam_id];
   auto ids_left_old = ids_last[cam_id];
-  perform_detection_monocular(img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old);
+
+  // perform_detection_monocular(img_pyramid_last[cam_id], img_mask_last[cam_id], pts_left_old, ids_left_old);
+  perform_detection_monocular(tracked_pts,sz,mask,pts_left_old,ids_left_old) ; 
   rT3 = boost::posix_time::microsec_clock::local_time();
 
   // Our return success masks, and predicted new features
@@ -120,7 +123,8 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
   std::vector<cv::KeyPoint> pts_left_new = pts_left_old;
 
   // Lets track temporally
-  perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
+  // perform_matching(img_pyramid_last[cam_id], imgpyr, pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
+  perform_matching(tracked_last[cam_id], tracked_pts,sz,pts_left_old, pts_left_new, cam_id, cam_id, mask_ll);
   assert(pts_left_new.size() == ids_left_old.size());
   rT4 = boost::posix_time::microsec_clock::local_time();
 
@@ -130,6 +134,7 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
     img_last[cam_id] = img;
     img_pyramid_last[cam_id] = imgpyr;
     img_mask_last[cam_id] = mask;
+    tracked_last[cam_id] = tracked_pts ; 
     pts_last[cam_id].clear();
     ids_last[cam_id].clear();
     PRINT_ERROR(RED "[KLT-EXTRACTOR]: Failed to get enough points to do RANSAC, resetting.....\n" RESET);
@@ -171,6 +176,7 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
     img_mask_last[cam_id] = mask;
     pts_last[cam_id] = good_left;
     ids_last[cam_id] = good_ids_left;
+    tracked_last[cam_id] = tracked_pts ; 
   }
   rT5 = boost::posix_time::microsec_clock::local_time();
 
@@ -452,5 +458,135 @@ void TrackExternal::perform_detection_monocular(const std::vector<TrackedPoint> 
     // move id foward and append this new point
     size_t temp = ++currid;
     ids0.push_back(temp);
+  }
+}
+
+
+void TrackExternal::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &kpts0,
+                                std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out) {
+
+  // We must have equal vectors
+  assert(kpts0.size() == kpts1.size());
+
+  // Return if we don't have any points
+  if (kpts0.empty() || kpts1.empty())
+    return;
+
+  // Convert keypoints into points (stupid opencv stuff)
+  std::vector<cv::Point2f> pts0, pts1;
+  for (size_t i = 0; i < kpts0.size(); i++) {
+    pts0.push_back(kpts0.at(i).pt);
+    pts1.push_back(kpts1.at(i).pt);
+  }
+
+  // If we don't have enough points for ransac just return empty
+  // We set the mask to be all zeros since all points failed RANSAC
+  if (pts0.size() < 10) {
+    for (size_t i = 0; i < pts0.size(); i++)
+      mask_out.push_back((uchar)0);
+    return;
+  }
+
+  // Now do KLT tracking to get the valid new points
+  std::vector<uchar> mask_klt;
+  std::vector<float> error;
+  cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+  cv::calcOpticalFlowPyrLK(img0pyr, img1pyr, pts0, pts1, mask_klt, error, win_size, pyr_levels, term_crit, cv::OPTFLOW_USE_INITIAL_FLOW);
+
+  // Normalize these points, so we can then do ransac
+  // We don't want to do ransac on distorted image uvs since the mapping is nonlinear
+  std::vector<cv::Point2f> pts0_n, pts1_n;
+  for (size_t i = 0; i < pts0.size(); i++) {
+    pts0_n.push_back(camera_calib.at(id0)->undistort_cv(pts0.at(i)));
+    pts1_n.push_back(camera_calib.at(id1)->undistort_cv(pts1.at(i)));
+  }
+
+  // Do RANSAC outlier rejection (note since we normalized the max pixel error is now in the normalized cords)
+  std::vector<uchar> mask_rsc;
+  double max_focallength_img0 = std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
+  double max_focallength_img1 = std::max(camera_calib.at(id1)->get_K()(0, 0), camera_calib.at(id1)->get_K()(1, 1));
+  double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
+  cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
+
+  // Loop through and record only ones that are valid
+  for (size_t i = 0; i < mask_klt.size(); i++) {
+    auto mask = (uchar)((i < mask_klt.size() && mask_klt[i] && i < mask_rsc.size() && mask_rsc[i]) ? 1 : 0);
+    mask_out.push_back(mask);
+  }
+
+  // Copy back the updated positions
+  for (size_t i = 0; i < pts0.size(); i++) {
+    kpts0.at(i).pt = pts0.at(i);
+    kpts1.at(i).pt = pts1.at(i);
+  }
+}
+
+void TrackExternal::perform_matching(const std::vector<TrackedPoint> &tracked0, const std::vector<TrackedPoint> &tracked1,cv::Size sz, std::vector<cv::KeyPoint> &kpts0,
+                        std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out)
+{
+  // We must have equal vectors
+  assert(kpts0.size() == kpts1.size());
+
+  // Return if we don't have any points
+  if (kpts0.empty() || kpts1.empty())
+    return;
+
+  // Convert keypoints into points (stupid opencv stuff)
+  std::vector<cv::Point2f> pts0, pts1;
+  for (size_t i = 0; i < kpts0.size(); i++) {
+    pts0.push_back(kpts0.at(i).pt);
+    pts1.push_back(kpts1.at(i).pt);
+  }
+
+  // If we don't have enough points for ransac just return empty
+  // We set the mask to be all zeros since all points failed RANSAC
+  if (pts0.size() < 10) {
+    for (size_t i = 0; i < pts0.size(); i++)
+      mask_out.push_back((uchar)0);
+    return;
+  }
+  // Now do KLT tracking to get the valid new points
+  std::vector<uchar> mask_klt;
+  std::vector<float> error;
+  // erase all points in output points
+  pts1.clear() ; 
+  //loop through kpts0 and find correspontind id in tracked1 
+  for(const auto kp : kpts0)
+  {
+    bool found_correspondancy = false ; 
+    for(const auto tp : tracked1)
+    {
+      if(kp.class_id == tp.id)
+      {
+        pts1.push_back(cv::Point2f(tp.position.x,tp.position.y)) ; 
+        found_correspondancy = true ;
+      }
+    }
+    mask_klt.push_back(int(found_correspondancy)) ; 
+  }
+  //Manually do the matching considerrig the ids
+  // cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+  // cv::calcOpticalFlowPyrLK(img0pyr, img1pyr, pts0, pts1, mask_klt, error, win_size, pyr_levels, term_crit, cv::OPTFLOW_USE_INITIAL_FLOW);
+  std::vector<cv::Point2f> pts0_n, pts1_n;
+  for (size_t i = 0; i < pts0.size(); i++) {
+    pts0_n.push_back(camera_calib.at(id0)->undistort_cv(pts0.at(i)));
+    pts1_n.push_back(camera_calib.at(id1)->undistort_cv(pts1.at(i)));
+  }
+
+  // Do RANSAC outlier rejection (note since we normalized the max pixel error is now in the normalized cords)
+  std::vector<uchar> mask_rsc;
+  double max_focallength_img0 = std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
+  double max_focallength_img1 = std::max(camera_calib.at(id1)->get_K()(0, 0), camera_calib.at(id1)->get_K()(1, 1));
+  double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
+  cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
+  // Loop through and record only ones that are valid
+  for (size_t i = 0; i < mask_klt.size(); i++) {
+    auto mask = (uchar)((i < mask_klt.size() && mask_klt[i] && i < mask_rsc.size() && mask_rsc[i]) ? 1 : 0);
+    mask_out.push_back(mask);
+  }
+  // Copy back the updated positions
+  for (size_t i = 0; i < pts0.size(); i++) {
+    kpts0.at(i).pt = pts0.at(i);
+    kpts1.at(i).pt = pts1.at(i);
   }
 }

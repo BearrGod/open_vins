@@ -76,12 +76,12 @@ protected:
   void feed_monocular(const CameraData &message, size_t msg_id);
 
   /**
-   * @brief Process new stereo pair of images
+   * @brief Process new stereo pair of images. No implementation for External tracker. Just do twice monocular.
    * @param message Contains our timestamp, images, and camera ids
    * @param msg_id_left first image index in message data vector
    * @param msg_id_right second image index in message data vector
    */
-  void feed_stereo(const CameraData &message, size_t msg_id_left, size_t msg_id_right);
+  void feed_stereo(const CameraData &message, size_t msg_id_left, size_t msg_id_right) { feed_monocular(message,msg_id_left) ; feed_monocular(message,msg_id_right) ; };
 
   /**
    * @brief Detects new features in the current image
@@ -111,27 +111,7 @@ protected:
   void perform_detection_monocular(const std::vector<TrackedPoint> &tracked0,cv::Size sz , const cv::Mat &mask0, std::vector<cv::KeyPoint> &pts0, 
                                    std::vector<size_t> &ids0);
 
-  /**
-   * @brief Detects new features in the current stereo pair
-   * @param img0pyr left image we will detect features on (first level of pyramid)
-   * @param img1pyr right image we will detect features on (first level of pyramid)
-   * @param mask0 mask which has what ROI we do not want features in
-   * @param mask1 mask which has what ROI we do not want features in
-   * @param cam_id_left first camera sensor id
-   * @param cam_id_right second camera sensor id
-   * @param pts0 left vector of currently extracted keypoints
-   * @param pts1 right vector of currently extracted keypoints
-   * @param ids0 left vector of feature ids for each currently extracted keypoint
-   * @param ids1 right vector of feature ids for each currently extracted keypoint
-   *
-   * This does the same logic as the perform_detection_monocular() function, but we also enforce stereo contraints.
-   * So we detect features in the left image, and then KLT track them onto the right image.
-   * If we have valid tracks, then we have both the keypoint on the left and its matching point in the right image.
-   * Will try to always have the "max_features" being tracked through KLT at each timestep.
-   */
-  void perform_detection_stereo(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, const cv::Mat &mask0,
-                                const cv::Mat &mask1, size_t cam_id_left, size_t cam_id_right, std::vector<cv::KeyPoint> &pts0,
-                                std::vector<cv::KeyPoint> &pts1, std::vector<size_t> &ids0, std::vector<size_t> &ids1);
+  
 
   /**
    * @brief KLT track between two images, and do RANSAC afterwards
@@ -148,6 +128,9 @@ protected:
    * If the second vector is non-empty, it will be used as an initial guess of where the keypoints are in the second image.
    */
   void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
+                        std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
+
+  void perform_matching(const std::vector<TrackedPoint> &tracked0, const std::vector<TrackedPoint> &tracked1,cv::Size sz, std::vector<cv::KeyPoint> &pts0,
                         std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
   // Parameters for our FAST grid detector
