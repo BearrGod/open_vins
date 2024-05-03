@@ -28,6 +28,7 @@
 #include "track/TrackDescriptor.h"
 #include "track/TrackKLT.h"
 #include "track/TrackSIM.h"
+#include "track/TrackExternal.h"
 #include "types/Landmark.h"
 #include "types/LandmarkRepresentation.h"
 #include "utils/opencv_lambda_body.h"
@@ -133,7 +134,14 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
     trackFEATS = std::shared_ptr<TrackBase>(new TrackKLT(state->_cam_intrinsics_cameras, init_max_features,
                                                          state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
                                                          params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
-  } else {
+  }
+  else if(params.use_external_tracker)
+  {
+    trackFEATS = std::shared_ptr<TrackBase>(new TrackExternal(state->_cam_intrinsics_cameras, init_max_features,
+                                                         state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
+                                                         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist));
+  } 
+  else {
     trackFEATS = std::shared_ptr<TrackBase>(new TrackDescriptor(
         state->_cam_intrinsics_cameras, init_max_features, state->_options.max_aruco_features, params.use_stereo, params.histogram_method,
         params.fast_threshold, params.grid_x, params.grid_y, params.min_px_dist, params.knn_ratio));

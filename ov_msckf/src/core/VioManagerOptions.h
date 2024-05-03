@@ -399,6 +399,12 @@ struct VioManagerOptions {
   /// If we should use KLT tracking, or descriptor matcher
   bool use_klt = true;
 
+  /// If we should use cuda gpu for tracking
+  bool use_gpu = false ; 
+
+  /// If we should use an external tracker. Tracker should keep track of data ids
+  bool use_external_tracker = false ; 
+
   /// If should extract aruco tags and estimate them
   bool use_aruco = true;
 
@@ -454,6 +460,8 @@ struct VioManagerOptions {
     if (parser != nullptr) {
       parser->parse_config("use_stereo", use_stereo);
       parser->parse_config("use_klt", use_klt);
+      parser->parse_config("use_gpu", use_gpu);
+      parser->parse_config("use_external_tracker", use_external_tracker);
       parser->parse_config("use_aruco", use_aruco);
       parser->parse_config("downsize_aruco", downsize_aruco);
       parser->parse_config("downsample_cameras", downsample_cameras);
@@ -486,6 +494,8 @@ struct VioManagerOptions {
     PRINT_DEBUG("FEATURE TRACKING PARAMETERS:\n");
     PRINT_DEBUG("  - use_stereo: %d\n", use_stereo);
     PRINT_DEBUG("  - use_klt: %d\n", use_klt);
+    PRINT_DEBUG("  - use_gpu: %d\n", use_gpu);
+    PRINT_DEBUG("  - use_external_tracker: %d\n", use_external_tracker);
     PRINT_DEBUG("  - use_aruco: %d\n", use_aruco);
     PRINT_DEBUG("  - downsize aruco: %d\n", downsize_aruco);
     PRINT_DEBUG("  - downsize cameras: %d\n", downsample_cameras);
