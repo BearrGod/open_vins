@@ -163,35 +163,80 @@ void ROS1Visualizer::setup_subscribers(std::shared_ptr<ov_core::YamlParser> pars
   // Logic for sync stereo subscriber
   // https://answers.ros.org/question/96346/subscribe-to-two-image_raws-with-one-function/?answer=96491#post-id-96491
   if (_app->get_params().state_options.num_cameras == 2) {
-    Read in the topics
-    std::string cam_topic0, cam_topic1;
-    _nh->param<std::string>("topic_camera" + std::to_string(0), cam_topic0, "/cam" + std::to_string(0) + "/image_raw");
-    _nh->param<std::string>("topic_camera" + std::to_string(1), cam_topic1, "/cam" + std::to_string(1) + "/image_raw");
-    parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
-    parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
-    Create sync filter (they have unique pointers internally, so we have to use move logic here...)
-    auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic0, 1,ros::TransportHints().udp());
-    auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic1, 1,ros::TransportHints().udp());
-    auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
-    sync->registerCallback(boost::bind(&ROS1Visualizer::callback_stereo, this, _1, _2, 0, 1));
-    Append to our vector of subscribers
-    sync_cam.push_back(sync);
-    sync_subs_cam.push_back(image_sub0);
-    sync_subs_cam.push_back(image_sub1);
-    PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic0.c_str());
-    PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic1.c_str());
-  } else {
+    // Create sync filter (they have unique pointers internally, so we have to use move logic here...)
+    /// Now we have two cases for now. Case 1 : we are using an external tracker or Case2 we are using opencv tracking (orb or KLT)
+    if(_app->get_params().use_external_tracker) /// External tracker
+    {
+      // Read the topics of tracker
+      std::string track_topic0, track_topic1;
+      _nh->param<std::string>("topic_camera" + std::to_string(0), track_topic0, "/cam" + std::to_string(0) + "/image_raw");
+      _nh->param<std::string>("topic_camera" + std::to_string(1), track_topic1, "/cam" + std::to_string(1) + "/image_raw");
+      parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "ros_track_topic", track_topic0);
+      parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "ros_track_topic", track_topic1);
+      auto track_sub0 = std::make_shared<message_filters::Subscriber<depthai_ros_msgs::TrackedFeaturesAndImage>>(*_nh, track_topic0, 1,ros::TransportHints().udp());
+      auto track_sub1 = std::make_shared<message_filters::Subscriber<depthai_ros_msgs::TrackedFeaturesAndImage>>(*_nh, track_topic1, 1,ros::TransportHints().udp());
+      auto sync = std::make_shared<message_filters::Synchronizer<sync_pol_track>>(sync_pol_track(10), *track_sub0, *track_sub1);
+      sync->registerCallback(boost::bind(&ROS1Visualizer::callback_stereo_track, this, _1, _2, 0, 1));
+      sync_track.push_back(sync);
+      sync_subs_track.push_back(track_sub0) ; 
+      sync_subs_track.push_back(track_sub1) ; 
+      PRINT_INFO("subscribing to tracker (stereo): %s\n", track_topic0.c_str());
+      PRINT_INFO("subscribing to tracker (stereo): %s\n", track_topic1.c_str());
+    }
+    else if(_app->get_params().use_gpu) //GPU tracker
+    {
+
+    }
+    else
+    {
+      // Read in the topics
+      std::string cam_topic0, cam_topic1;
+      _nh->param<std::string>("topic_camera" + std::to_string(0), cam_topic0, "/cam" + std::to_string(0) + "/image_raw");
+      _nh->param<std::string>("topic_camera" + std::to_string(1), cam_topic1, "/cam" + std::to_string(1) + "/image_raw");
+      parser->parse_external("relative_config_imucam", "cam" + std::to_string(0), "rostopic", cam_topic0);
+      parser->parse_external("relative_config_imucam", "cam" + std::to_string(1), "rostopic", cam_topic1);
+      auto image_sub0 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic0, 1,ros::TransportHints().udp());
+      auto image_sub1 = std::make_shared<message_filters::Subscriber<sensor_msgs::Image>>(*_nh, cam_topic1, 1,ros::TransportHints().udp());
+      auto sync = std::make_shared<message_filters::Synchronizer<sync_pol>>(sync_pol(10), *image_sub0, *image_sub1);
+      sync->registerCallback(boost::bind(&ROS1Visualizer::callback_stereo, this, _1, _2, 0, 1));
+      // Append to our vector of subscribers
+      sync_cam.push_back(sync);
+      sync_subs_cam.push_back(image_sub0);
+      sync_subs_cam.push_back(image_sub1);
+      PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic0.c_str());
+      PRINT_INFO("subscribing to cam (stereo): %s\n", cam_topic1.c_str());
+    }
+    
+  } 
+  else {
     // Now we should add any non-stereo callbacks here
     for (int i = 0; i < _app->get_params().state_options.num_cameras; i++) {
-      // read in the topic
-      std::string cam_topic;
-      _nh->param<std::string>("topic_camera" + std::to_string(i), cam_topic, "/cam" + std::to_string(i) + "/image_raw");
-      parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "rostopic", cam_topic);
-      // create subscriber
-      subs_cam.push_back(_nh->subscribe<sensor_msgs::Image>(cam_topic, 10, boost::bind(&ROS1Visualizer::callback_monocular, this, _1, i)));
-      PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
+      if(_app->get_params().use_external_tracker)
+      {
+        std::string track_topic ; 
+        _nh->param<std::string>("topic_camera" + std::to_string(i), track_topic, "/cam" + std::to_string(i) + "/image_raw");
+        parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "ros_track_topic", track_topic);
+        // create subscriber
+        subs_cam.push_back(_nh->subscribe<depthai_ros_msgs::TrackedFeaturesAndImage>(track_topic, 10, boost::bind(&ROS1Visualizer::callback_monocular_track, this, _1, i)));
+        PRINT_INFO("subscribing to tracker (mono): %s\n", track_topic.c_str());
+      }
+      else if (_app->get_params().use_gpu)
+      {
+
+      }
+      else
+      {
+        // read in the topic
+        std::string cam_topic;
+        _nh->param<std::string>("topic_camera" + std::to_string(i), cam_topic, "/cam" + std::to_string(i) + "/image_raw");
+        parser->parse_external("relative_config_imucam", "cam" + std::to_string(i), "rostopic", cam_topic);
+        // create subscriber
+        subs_cam.push_back(_nh->subscribe<sensor_msgs::Image>(cam_topic, 10, boost::bind(&ROS1Visualizer::callback_monocular, this, _1, i)));
+        PRINT_INFO("subscribing to cam (mono): %s\n", cam_topic.c_str());
+      }
     }
   }
+
 }
 
 void ROS1Visualizer::visualize() {
@@ -437,7 +482,7 @@ void ROS1Visualizer::visualize_final() {
 
 void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
 
-  PRINT_INFO(BOLDREDPURPLE "Inertial Data transport time : %8f ms\n\n" RESET, (msg->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
+  // PRINT_INFO(BOLDREDPURPLE "Inertial Data transport time : %8f ms\n\n" RESET, (msg->header.stamp.toSec()-ros::Time::now().toSec()) * 1000.0f)
   // convert into correct format
   auto t_inertial1 = boost::posix_time::microsec_clock::local_time();
   ov_core::ImuData message;
@@ -449,7 +494,7 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   _app->feed_measurement_imu(message);
   visualize_odometry(message.timestamp);
   auto t_inertial2 = boost::posix_time::microsec_clock::local_time();
-  PRINT_INFO(BOLDREDPURPLE "Inertial treatment time TIME: %.8f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
+  // PRINT_INFO(BOLDREDPURPLE "Inertial treatment time TIME: %.8f seconds\n\n" RESET, (t_inertial2 - t_inertial1).total_microseconds() * 1e-6)
 
   // If the processing queue is currently active / running just return so we can keep getting measurements
   // Otherwise create a second thread to do our update in an async manor
@@ -538,6 +583,138 @@ void ROS1Visualizer::callback_monocular(const sensor_msgs::ImageConstPtr &msg0, 
   std::sort(camera_queue.begin(), camera_queue.end());
 }
 
+void ROS1Visualizer::callback_monocular_track(const depthai_ros_msgs::TrackedFeaturesAndImage::ConstPtr &msg0, int cam_id0)
+{
+  PRINT_INFO(BOLDREDPURPLE "Tracking %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f) ;
+  double timestamp = msg0->header.stamp.toSec();
+  double time_delta = 1.0 / _app->get_params().track_frequency;
+  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
+    return;
+  }
+  camera_last_timestamp[cam_id0] = timestamp;
+  // Get the image
+  cv_bridge::CvImageConstPtr cv_ptr;
+  try {
+    cv_ptr = cv_bridge::toCvCopy(msg0->image, sensor_msgs::image_encodings::MONO8);
+  } catch (cv_bridge::Exception &e) {
+    PRINT_ERROR("cv_bridge exception: %s", e.what());
+    return;
+  }
+  // Create the measurement
+  ov_core::CameraData message;
+  message.timestamp = msg0->header.stamp.toSec();
+  message.sensor_ids.push_back(cam_id0);
+  message.images.push_back(cv_ptr->image.clone());
+  message.image_sizes.push_back(cv_ptr->image.size()); 
+  std::vector<ov_core::TrackedPoint> current_tracked_points ; 
+  for(const auto tp : msg0->features)
+  {
+    ov_core::TrackedPoint p ; 
+    p.age = tp.age ; 
+    p.harrisScore = tp.harris_score ; 
+    p.id = tp.id ; 
+    p.position.x = tp.position.x ;
+    p.position.y = tp.position.y ; 
+    p.trackingError = tp.tracking_error ; 
+    current_tracked_points.push_back(p) ; 
+  }
+  message.tracked_points.push_back(current_tracked_points) ;
+  // Load the mask if we are using it, else it is empty
+  // TODO: in the future we should get this from external pixel segmentation
+  if (_app->get_params().use_mask) {
+    message.masks.push_back(_app->get_params().masks.at(cam_id0));
+  } else {
+    message.masks.push_back(cv::Mat::zeros(cv_ptr->image.rows, cv_ptr->image.cols, CV_8UC1));
+  }
+
+  // append it to our queue of images
+  std::lock_guard<std::mutex> lck(camera_queue_mtx);
+  camera_queue.push_back(message);
+  std::sort(camera_queue.begin(), camera_queue.end());
+}
+
+void ROS1Visualizer::callback_stereo_track(const depthai_ros_msgs::TrackedFeaturesAndImage::ConstPtr &msg0, const depthai_ros_msgs::TrackedFeaturesAndImage::ConstPtr &msg1, int cam_id0, int cam_id1)
+{
+  PRINT_INFO(BOLDREDPURPLE "Tracking %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
+  PRINT_INFO(BOLDREDPURPLE "Tracking %d Data transport time : %8f ms\n\n" RESET, cam_id1,  (ros::Time::now().toSec()-msg1->header.stamp.toSec()) * 1000.0f)
+  // Check if we should drop this image
+  double timestamp = msg0->header.stamp.toSec();
+  double time_delta = 1.0 / _app->get_params().track_frequency;
+  if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end() && timestamp < camera_last_timestamp.at(cam_id0) + time_delta) {
+    return;
+  }
+  camera_last_timestamp[cam_id0] = timestamp;
+  // Get the image
+  cv_bridge::CvImageConstPtr cv_ptr0;
+  try {
+    cv_ptr0 = cv_bridge::toCvCopy(msg0->image, sensor_msgs::image_encodings::MONO8);
+  } catch (cv_bridge::Exception &e) {
+    PRINT_ERROR("cv_bridge exception: %s\n", e.what());
+    return;
+  }
+
+  // Get the image
+  cv_bridge::CvImageConstPtr cv_ptr1;
+  try {
+    cv_ptr1 = cv_bridge::toCvCopy(msg1->image, sensor_msgs::image_encodings::MONO8);
+  } catch (cv_bridge::Exception &e) {
+    PRINT_ERROR("cv_bridge exception: %s\n", e.what());
+    return;
+  }
+  std::vector<ov_core::TrackedPoint> current_tracked_points0 , current_tracked_points1 ;
+  /// Convert DAI tRACKED FEATURE TO ov_core data 
+  for(const auto tp : msg0->features)
+  {
+    ov_core::TrackedPoint p ; 
+    p.age = tp.age ; 
+    p.harrisScore = tp.harris_score ; 
+    p.id = tp.id ; 
+    p.position.x = tp.position.x ;
+    p.position.y = tp.position.y ; 
+    p.trackingError = tp.tracking_error ; 
+    current_tracked_points0.push_back(p) ; 
+  }
+
+  for(const auto tp : msg1->features)
+  {
+    ov_core::TrackedPoint p ; 
+    p.age = tp.age ; 
+    p.harrisScore = tp.harris_score ; 
+    p.id = tp.id ; 
+    p.position.x = tp.position.x ;
+    p.position.y = tp.position.y ; 
+    p.trackingError = tp.tracking_error ; 
+    current_tracked_points1.push_back(p) ; 
+  }
+  // Create the measurement
+  ov_core::CameraData message;
+  message.timestamp = msg0->header.stamp.toSec();
+  message.sensor_ids.push_back(cam_id0);
+  message.sensor_ids.push_back(cam_id1);
+  message.images.push_back(cv_ptr0->image.clone());
+  message.images.push_back(cv_ptr1->image.clone());
+  message.image_sizes.push_back(cv_ptr0->image.size()) ; 
+  message.image_sizes.push_back(cv_ptr1->image.size()) ; 
+  message.tracked_points.push_back(current_tracked_points0) ; 
+  message.tracked_points.push_back(current_tracked_points1) ; 
+
+  // Load the mask if we are using it, else it is empty
+  // TODO: in the future we should get this from external pixel segmentation
+  if (_app->get_params().use_mask) {
+    message.masks.push_back(_app->get_params().masks.at(cam_id0));
+    message.masks.push_back(_app->get_params().masks.at(cam_id1));
+  } else {
+    // message.masks.push_back(cv::Mat(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1, cv::Scalar(255)));
+    message.masks.push_back(cv::Mat::zeros(cv_ptr0->image.rows, cv_ptr0->image.cols, CV_8UC1));
+    message.masks.push_back(cv::Mat::zeros(cv_ptr1->image.rows, cv_ptr1->image.cols, CV_8UC1));
+  }
+
+  // append it to our queue of images
+  std::lock_guard<std::mutex> lck(camera_queue_mtx);
+  camera_queue.push_back(message);
+  std::sort(camera_queue.begin(), camera_queue.end());
+}
+
 void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0,
                                      int cam_id1) {
   PRINT_INFO(BOLDREDPURPLE "Image %d Data transport time : %8f ms\n\n" RESET, cam_id0, (ros::Time::now().toSec()-msg0->header.stamp.toSec()) * 1000.0f)
@@ -592,6 +769,7 @@ void ROS1Visualizer::callback_stereo(const sensor_msgs::ImageConstPtr &msg0, con
   camera_queue.push_back(message);
   std::sort(camera_queue.begin(), camera_queue.end());
 }
+
 
 void ROS1Visualizer::publish_state() {
 

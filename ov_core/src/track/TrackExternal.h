@@ -76,12 +76,21 @@ protected:
   void feed_monocular(const CameraData &message, size_t msg_id);
 
   /**
+   * @brief Process a new monocular image, fully trusts external tracked in regard to the ids.
+   * 
+   * @param message Contains our timestamp, images, and camera ids
+   * @param msg_id the camera index in message data vector
+   * @param dummy prototype differentiation argument
+   */
+  void feed_monocular(const CameraData &message, size_t msg_id,bool dummy);
+
+  /**
    * @brief Process new stereo pair of images. No implementation for External tracker. Just do twice monocular.
    * @param message Contains our timestamp, images, and camera ids
    * @param msg_id_left first image index in message data vector
    * @param msg_id_right second image index in message data vector
    */
-  void feed_stereo(const CameraData &message, size_t msg_id_left, size_t msg_id_right) { feed_monocular(message,msg_id_left) ; feed_monocular(message,msg_id_right) ; };
+  void feed_stereo(const CameraData &message, size_t msg_id_left, size_t msg_id_right) { feed_monocular(message,msg_id_left,true) ; feed_monocular(message,msg_id_right,true) ; };
 
   /**
    * @brief Detects new features in the current image
@@ -130,9 +139,26 @@ protected:
   void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
                         std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
+  
   void perform_matching(const std::vector<TrackedPoint> &tracked0, const std::vector<TrackedPoint> &tracked1,cv::Size sz, std::vector<cv::KeyPoint> &pts0,
                         std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
 
+  /**
+   * @brief This function takes tracked points in image 1 as is with ids and perform eventual additional outlier rejections. 
+   *    Since the final goal is to register in database we will not delete tracking points if they are new. instead we will try to do : 
+   *    -Grid rejection to reject features that are too close in tracked1
+   *    -Mask rejection to reject outliers outside valid aeria
+   *    -Ransac outliers rejection between tracked0 and tracked1 only for common point ids between the two after finding findFundamentalMat. 
+   * 
+   * @param tracked0 
+   * @param tracked1 
+   * @param sz 
+   * @param trackde_out
+   * @param  id0 
+   * @return * void 
+   */
+  void perform_additional_rejection(const std::vector<TrackedPoint> &tracked0, const std::vector<TrackedPoint> &tracked1,const cv::Mat &mask0,cv::Size sz, std::vector<TrackedPoint>& trackde_out,size_t id0) ; 
+  
   // Parameters for our FAST grid detector
   int threshold;
   int grid_x;

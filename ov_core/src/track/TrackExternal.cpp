@@ -33,45 +33,104 @@ void TrackExternal::feed_new_camera(const CameraData &message) {
     size_t cam_id = message.sensor_ids.at(msg_id);
     std::lock_guard<std::mutex> lck(mtx_feeds.at(cam_id));
 
-    // Histogram equalize
-    cv::Mat img;
-    if (histogram_method == HistogramMethod::HISTOGRAM) {
-      cv::equalizeHist(message.images.at(msg_id), img);
-    } else if (histogram_method == HistogramMethod::CLAHE) {
-      double eq_clip_limit = 10.0;
-      cv::Size eq_win_size = cv::Size(8, 8);
-      cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE(eq_clip_limit, eq_win_size);
-      clahe->apply(message.images.at(msg_id), img);
-    } else {
-      img = message.images.at(msg_id);
-    }
-
-    // Extract image pyramid
-    // std::vector<cv::Mat> imgpyr;
-    // cv::buildOpticalFlowPyramid(img, imgpyr, win_size, pyr_levels);
-
     // Save!
-    img_curr[cam_id] = img;
+    img_curr[cam_id] = message.images.at(msg_id) ;
     tracked_curr[cam_id] = message.tracked_points[cam_id] ; 
-    // img_pyramid_curr[cam_id] = imgpyr;
   }
 
   // Either call our stereo or monocular version
   // If we are doing binocular tracking, then we should parallize our tracking
   if (num_images == 1) {
-    feed_monocular(message, 0);
+    feed_monocular(message, 0,true);
   } else if (num_images == 2 && use_stereo) {
     feed_stereo(message, 0, 1);
   } else if (!use_stereo) {
     parallel_for_(cv::Range(0, (int)num_images), LambdaBody([&](const cv::Range &range) {
                     for (int i = range.start; i < range.end; i++) {
-                      feed_monocular(message, i);
+                      feed_monocular(message, i,true);
                     }
                   }));
   } else {
     PRINT_ERROR(RED "[ERROR]: invalid number of images passed %zu, we only support mono or stereo tracking", num_images);
     std::exit(EXIT_FAILURE);
   }
+}
+
+
+void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id,bool dummy)
+{
+  // Lock this data feed for this camera
+  size_t cam_id = message.sensor_ids.at(msg_id);
+  std::lock_guard<std::mutex> lck(mtx_feeds.at(cam_id));
+
+  // Get our image objects for this image
+  cv::Mat img = img_curr.at(cam_id); 
+  std::vector<cv::Mat> imgpyr = img_pyramid_curr.at(cam_id);
+  cv::Mat mask = message.masks.at(msg_id);
+  // Get tracked points for this image 
+  std::vector<TrackedPoint> tracked_pts = tracked_curr.at(cam_id) ;
+  cv::Size sz = message.image_sizes.at(cam_id) ; 
+  rT2 = boost::posix_time::microsec_clock::local_time();
+  
+  // If we didn't have any successful tracks last time, just extract this time
+  // This also handles, the tracking initalization on the first call to this extractor
+  if (pts_last[cam_id].empty()) {
+    // Detect new features
+    std::vector<cv::KeyPoint> good_left;
+    std::vector<size_t> good_ids_left;
+    for(const auto tp : tracked_pts)
+    {
+      good_left.push_back(cv::KeyPoint(cv::Point2f(tp.position.x,tp.position.y),5,0.0,tp.harrisScore,0.0,tp.id)) ; 
+      good_ids_left.push_back(tp.id) ; 
+    }
+    // Save the current image and pyramid
+    std::lock_guard<std::mutex> lckv(mtx_last_vars);
+    img_last[cam_id] = img;
+    img_pyramid_last[cam_id] = imgpyr;
+    img_mask_last[cam_id] = mask;
+    tracked_last[cam_id] = tracked_pts ; 
+    pts_last[cam_id] = good_left;
+    ids_last[cam_id] = good_ids_left;
+    return;
+  }
+  // We trust the external tracker with the ids and points so we will 
+  // take all the points in after trying to do randsac.
+  std::vector<TrackedPoint> valid_tracking_points ;
+  int pts_before_detect = (int)pts_last[cam_id].size();
+  auto pts_left_old = pts_last[cam_id];
+  auto ids_left_old = ids_last[cam_id];
+  perform_additional_rejection(tracked_last[cam_id],tracked_pts,mask,sz,valid_tracking_points,msg_id) ;
+  rT3 = boost::posix_time::microsec_clock::local_time();
+  // Get our "good tracks"
+  std::vector<cv::KeyPoint> good_left;
+  std::vector<size_t> good_ids_left;
+  for(const auto tp : valid_tracking_points)
+  {
+    good_left.push_back(cv::KeyPoint(cv::Point2f(tp.position.x,tp.position.y),5,0.0,tp.harrisScore,0.0,tp.id)) ; 
+    good_ids_left.push_back(tp.id) ; 
+  }
+  // Update our feature database, with theses new observations
+  rT4 = boost::posix_time::microsec_clock::local_time();
+  for (size_t i = 0; i < good_left.size(); i++) {
+    cv::Point2f npt_l = camera_calib.at(cam_id)->undistort_cv(good_left.at(i).pt);
+    database->update_feature(good_ids_left.at(i), message.timestamp, cam_id, good_left.at(i).pt.x, good_left.at(i).pt.y, npt_l.x, npt_l.y);
+  }
+  
+  {
+    std::lock_guard<std::mutex> lckv(mtx_last_vars);
+    img_last[cam_id] = img;
+    img_pyramid_last[cam_id] = imgpyr;
+    img_mask_last[cam_id] = mask;
+    pts_last[cam_id] = good_left;
+    ids_last[cam_id] = good_ids_left;
+    tracked_last[cam_id] = valid_tracking_points ; // store good data tracked
+  }
+  rT5 = boost::posix_time::microsec_clock::local_time();
+  PRINT_ALL("[TIME-EXT]: %.4f seconds for total\n", (rT5 - rT1).total_microseconds() * 1e-6);
+  PRINT_ALL("[TIME-EXT]: %.4f seconds for detection (%zu detected)\n", (rT3 - rT2).total_microseconds() * 1e-6,
+            (int)pts_last[cam_id].size() - pts_before_detect);
+  PRINT_ALL("[TIME-EXT]: %.4f seconds for feature DB update (%d features)\n", (rT5 - rT4).total_microseconds() * 1e-6,
+            (int)good_left.size());
 }
 
 void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
@@ -97,6 +156,7 @@ void TrackExternal::feed_monocular(const CameraData &message, size_t msg_id) {
     std::vector<size_t> good_ids_left;
     // perform_detection_monocular(imgpyr, mask, good_left, good_ids_left);
     perform_detection_monocular(tracked_pts,sz,mask,good_left,good_ids_left) ; 
+    
     // Save the current image and pyramid
     std::lock_guard<std::mutex> lckv(mtx_last_vars);
     img_last[cam_id] = img;
@@ -589,4 +649,58 @@ void TrackExternal::perform_matching(const std::vector<TrackedPoint> &tracked0, 
     kpts0.at(i).pt = pts0.at(i);
     kpts1.at(i).pt = pts1.at(i);
   }
+}
+
+void TrackExternal::perform_additional_rejection(const std::vector<TrackedPoint> &tracked0, const std::vector<TrackedPoint> &tracked1,const cv::Mat &mask0,cv::Size sz, std::vector<TrackedPoint>& tracked_out,size_t id0)
+{
+  /// First go trhough the new tracked points 1 and split them into old and new tracking points.
+  std::vector<TrackedPoint> old_points, new_points,old_valid_points ;
+  if (tracked0.empty() || tracked1.empty())
+    return;  
+  
+  for(const auto tp1 : tracked1)
+  {
+    auto it = std::find_if(tracked0.begin(),tracked0.end(),[&](const TrackedPoint& p){return p.id == tp1.id ; }) ; // try to find the point with the same id in tracked0.
+    if(it!=tracked0.end()) // if point is found then add it to the new tracked points
+      new_points.push_back(tp1) ;  // add it to the new points
+    else
+      old_points.push_back(tp1) ;  // If not found, add it to the old points
+  }
+  // Now make randsac between the points to eliminate potential old outliers .
+  
+  /// First remove points in tracked0 that have no correspondant in old_points.
+  for(const auto tp0 : old_points)
+  {
+    old_valid_points.push_back(*std::find_if(tracked0.begin(),tracked0.end(),[&](const TrackedPoint& p){return p.id == tp0.id ; })) ; 
+  }
+  
+  assert(old_points.size() == old_valid_points.size()) ; 
+  
+  double max_focallength= std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
+  std::vector<cv::Point2f> pts0_n, pts1_n;
+  for(size_t i =0 ; i<old_points.size() ; i++)
+  {
+    pts1_n.push_back(camera_calib.at(id0)->undistort_cv(cv::Point2f(old_points.at(i).position.x,old_points.at(i).position.y))) ; 
+    pts0_n.push_back(camera_calib.at(id0)->undistort_cv(cv::Point2f(old_valid_points.at(i).position.x,old_valid_points.at(i).position.y))) ; 
+  }
+  // Do RANSAC outlier rejection (note since we normalized the max pixel error is now in the normalized cords)
+  std::vector<uchar> mask_rsc;
+  if (pts0_n.size() < 10) { // If not enough points, take all points in randsac
+    for (size_t i = 0; i < pts0_n.size(); i++)
+      mask_rsc.push_back((uchar)1);
+  }
+  else
+    cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc); // ranscac will rule out invalid old points.
+  for(size_t i=0; i<mask_rsc.size() ; i++)
+  {
+    if(mask_rsc[i] && mask0.at<uint8_t>((int)old_points.at(i).position.y,(int)old_points.at(i).position.x)<127) // reject outside of the mask and not validated by randsac
+      tracked_out.push_back(old_points.at(i)) ; 
+  }
+  for(const auto tp : new_points)
+  {
+    if(mask0.at<uint8_t>((int)tp.position.y,(int)tp.position.x)<127)
+      tracked_out.push_back(tp) ; 
+  } 
+
+  return ; 
 }

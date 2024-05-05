@@ -40,6 +40,8 @@
 #include <sensor_msgs/point_cloud2_iterator.h>
 #include <std_msgs/Float64.h>
 #include <tf/transform_broadcaster.h>
+#include <depthai_ros_msgs/TrackedFeatures.h>
+#include <depthai_ros_msgs/TrackedFeaturesAndImage.h>
 
 #include <atomic>
 #include <fstream>
@@ -111,8 +113,15 @@ public:
   /// Callback for monocular cameras information
   void callback_monocular(const sensor_msgs::ImageConstPtr &msg0, int cam_id0);
 
+  /// Callback for monocular cameras information
+  void callback_monocular_track(const depthai_ros_msgs::TrackedFeaturesAndImageConstPtr &msg0, int cam_id0);
+
   /// Callback for synchronized stereo camera information
   void callback_stereo(const sensor_msgs::ImageConstPtr &msg0, const sensor_msgs::ImageConstPtr &msg1, int cam_id0, int cam_id1);
+
+  /// Callback for synchronized tracking stereo info
+  void callback_stereo_track(const depthai_ros_msgs::TrackedFeaturesAndImageConstPtr &msg0, const depthai_ros_msgs::TrackedFeaturesAndImageConstPtr &msg1, int cam_id0, int cam_id1);
+
 
 protected:
   /// Publish the current state
@@ -150,8 +159,11 @@ protected:
   ros::Subscriber sub_imu;
   std::vector<ros::Subscriber> subs_cam;
   typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::Image> sync_pol;
+  typedef message_filters::sync_policies::ApproximateTime<depthai_ros_msgs::TrackedFeaturesAndImage, depthai_ros_msgs::TrackedFeaturesAndImage> sync_pol_track;
   std::vector<std::shared_ptr<message_filters::Synchronizer<sync_pol>>> sync_cam;
+  std::vector<std::shared_ptr<message_filters::Synchronizer<sync_pol_track>>> sync_track;
   std::vector<std::shared_ptr<message_filters::Subscriber<sensor_msgs::Image>>> sync_subs_cam;
+  std::vector<std::shared_ptr<message_filters::Subscriber<depthai_ros_msgs::TrackedFeaturesAndImage>>> sync_subs_track;
 
   // For path viz
   unsigned int poses_seq_imu = 0;
