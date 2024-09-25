@@ -74,6 +74,7 @@ public:
     return time;
   }
 
+
   /**
    * @brief Calculates the current max size of the covariance
    * @return Size of the current covariance matrix

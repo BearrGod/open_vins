@@ -74,6 +74,15 @@ public:
   }
 
   /**
+   * @brief Returns the gravity in global frame
+   * @returns Value of gravity on the global frame
+   */
+  Eigen::Vector3d get_gravity()
+  {
+    return _gravity ; 
+  }
+
+  /**
    * @brief This will remove any IMU measurements that are older then the given measurement time
    * @param oldest_time Time that we can discard measurements before (in IMU clock)
    */

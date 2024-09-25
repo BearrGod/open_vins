@@ -137,6 +137,9 @@ void Propagator::propagate_and_clone(std::shared_ptr<State> state, double timest
   StateHelper::augment_clone(state, last_w);
 }
 
+
+
+
 bool Propagator::fast_state_propagate(std::shared_ptr<State> state, double timestamp, Eigen::Matrix<double, 13, 1> &state_plus,
                                       Eigen::Matrix<double, 12, 12> &covariance) {
 
@@ -252,6 +255,7 @@ bool Propagator::fast_state_propagate(std::shared_ptr<State> state, double times
   Eigen::Vector3d last_a = R_ACCtoIMU * Da * (prop_data.at(prop_data.size() - 1).am - bias_a);
   Eigen::Vector3d last_w = R_GYROtoIMU * Dw * (prop_data.at(prop_data.size() - 1).wm - bias_g - Tg * last_a);
   state_plus.block(10, 0, 3, 1) = last_w;
+  // state_plus.block(13, 0, 3, 1) = last_a;
 
   // Do a covariance propagation for our velocity (needs to be in local frame)
   // TODO: more properly do the covariance of the angular velocity here...

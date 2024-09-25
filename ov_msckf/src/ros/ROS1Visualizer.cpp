@@ -52,6 +52,10 @@ ROS1Visualizer::ROS1Visualizer(std::shared_ptr<ros::NodeHandle> nh, std::shared_
   pub_pathimu = nh->advertise<nav_msgs::Path>("pathimu", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_pathimu.getTopic().c_str());
 
+  // Setup State Publisher 
+  pub_state = nh->advertise<ov_msgs::Measure>("state",2) ; 
+  PRINT_DEBUG("Publishing: %s\n", pub_state.getTopic().c_str());
+
   // 3D points publishing
   pub_points_msckf = nh->advertise<sensor_msgs::PointCloud2>("points_msckf", 2);
   PRINT_DEBUG("Publishing: %s\n", pub_points_msckf.getTopic().c_str());
@@ -255,6 +259,48 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
   if (!_app->get_propagator()->fast_state_propagate(state, timestamp, state_plus, cov_plus))
     return;
 
+  if(pub_state.getNumSubscribers() !=0)
+  {
+    ov_msgs::Measure m ; 
+    if(imu_cache.count(timestamp)>0)
+    {
+      m.header = imu_cache[timestamp].header ; 
+      m.angular_velocity = imu_cache[timestamp].angular_velocity ; 
+      m.angular_velocity_covariance = imu_cache[timestamp].angular_velocity_covariance ; 
+      m.linear_acceleration = imu_cache[timestamp].linear_acceleration ; 
+      m.linear_acceleration_covariance = imu_cache[timestamp].linear_acceleration_covariance ; 
+      m.orientation.x = state_plus(0);
+      m.orientation.y = state_plus(1);
+      m.orientation.z = state_plus(2);
+      m.orientation.w = state_plus(3);
+      m.position.x = state_plus(4);
+      m.position.y = state_plus(5);
+      m.position.z = state_plus(6);
+      m.position_covariance[0] = -1 ; 
+      m.orientation_covariance[0] = -1 ; 
+      m.gravity.x = _app->get_propagator()->get_gravity()[0] ; 
+      m.gravity.y = _app->get_propagator()->get_gravity()[1] ;
+      m.gravity.z = _app->get_propagator()->get_gravity()[2] ; 
+      auto ba = state->_imu->bias_a() ; 
+      auto bg = state->_imu->bias_g() ; 
+      m.ba.x = ba[0] ; 
+      m.ba.y = ba[1] ;
+      m.ba.z = ba[2] ;
+      m.bg.x = bg[0] ; 
+      m.bg.y = bg[1] ;
+      m.bg.z = bg[2] ;  
+      m.q_GtoI.x = state_plus(0);
+      m.q_GtoI.y = state_plus(1);
+      m.q_GtoI.z = state_plus(2);
+      m.q_GtoI.w = state_plus(3); 
+      m.v_IinG.x = state_plus(7);   // vel in local frame
+      m.v_IinG.y = state_plus(8);   // vel in local frame
+      m.v_IinG.z = state_plus(9);   // vel in local frame
+      pub_state.publish(m) ; 
+    }
+    else 
+      ROS_ERROR("Could Not find coresponding Imu Timestamp. Not publishing state") ; 
+  }
   //  // Get the simulated groundtruth so we can evaulate the error in respect to it
   //  // NOTE: we get the true time in the IMU clock frame
   //  if (_sim != nullptr) {
@@ -281,7 +327,8 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
   //                 pos_nees);
   //    }
   //  }
-
+  // Now dispatch State plus in relevat state imu message 
+  
   // Publish our odometry message if requested
   if (pub_odomimu.getNumSubscribers() != 0) {
 
@@ -306,6 +353,7 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
     odomIinM.twist.twist.angular.x = state_plus(10); // we do not estimate this...
     odomIinM.twist.twist.angular.y = state_plus(11); // we do not estimate this...
     odomIinM.twist.twist.angular.z = state_plus(12); // we do not estimate this...
+    
 
     // Finally set the covariance in the message (in the order position then orientation as per ros convention)
     Eigen::Matrix<double, 12, 12> Phi = Eigen::Matrix<double, 12, 12>::Zero();
@@ -442,9 +490,10 @@ void ROS1Visualizer::callback_inertial(const sensor_msgs::Imu::ConstPtr &msg) {
   message.timestamp = msg->header.stamp.toSec();
   message.wm << msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z;
   message.am << msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z;
-
   // send it to our VIO system
   _app->feed_measurement_imu(message);
+  // Cache current Imu Value
+  imu_cache[msg->header.stamp.toSec()] = *msg ; 
   visualize_odometry(message.timestamp);
 
   // If the processing queue is currently active / running just return so we can keep getting measurements
