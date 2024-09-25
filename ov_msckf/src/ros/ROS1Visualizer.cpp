@@ -296,6 +296,7 @@ void ROS1Visualizer::visualize_odometry(double timestamp) {
       m.v_IinG.x = state_plus(7);   // vel in local frame
       m.v_IinG.y = state_plus(8);   // vel in local frame
       m.v_IinG.z = state_plus(9);   // vel in local frame
+      imu_cache.erase(timestamp) ; // Since this imu data has been used, clear it. It souldn't come again or there is a problem with openvins (We are supposed to go forward in time)
       pub_state.publish(m) ; 
     }
     else 
